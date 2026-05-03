@@ -1,0 +1,706 @@
+---
+title: "Document Classification"
+author: "Khandker Qaiduzzaman"
+format: html
+editor: visual
+execute: 
+  warning: false
+---
+
+# Objective
+
+The objective of this project is to build a predictive text classification model that can distinguish between spam and ham (non-spam) emails. The analysis uses a labeled corpus of email messages as training data and applies text preprocessing techniques to prepare both training and test datasets for classification.
+
+The final goal is to use already labeled emails to predict the class (spam or ham) of new, unseen email documents.
+
+------------------------------------------------------------------------
+
+# Approach
+
+For this project, I used a combination of labeled email datasets from the SpamAssassin public corpus, including spam and easy ham folders, along with an additional MBOX file containing my personal spam emails used as test data.
+
+The datasets are available here: <https://github.com/NafeesKhandker/Document-Classification>
+
+The core research problem is:
+
+-   **Can a machine learning model trained on labeled email data accurately classify new, unseen emails as spam or ham based on text content?**
+
+The dataset consists of raw email messages that include headers, system metadata, HTML content, encoding artifacts, and unstructured text. Therefore, significant preprocessing is required to convert the raw emails into a consistent and analyzable format.
+
+The analysis follows a supervised learning approach, where:
+
+-   **Training data** consists of labeled spam and ham emails
+-   **Test data** consists of unseen spam emails (MBOX file)
+-   **Features** are derived from cleaned email text
+
+### Data Analysis Steps
+
+The analysis is structured as follows:
+
+1.  **Data Collection (Training Set):** - Spam and ham emails are loaded from local directories (`spam_2` and `easy_ham`) - Each file is read and combined into a single raw text string per email
+
+2.  **Label Assignment:** - Emails from `spam_2` are labeled as **spam** - Emails from `easy_ham` are labeled as **ham**
+
+3.  **Email Parsing:** - Each email is split into headers and body - Only the email body is retained for text analysis
+
+4.  **Text Cleaning (Training Data):**
+
+    -   Convert text to lowercase
+    -   Remove HTML tags, URLs, and email addresses
+    -   Remove punctuation, digits, and non-ASCII characters
+    -   Normalize whitespace for consistency
+
+5.  **Test Data Preparation (MBOX File):**
+
+    -   The MBOX file is read as a single raw text file
+    -   Emails are separated using `"From "` delimiters
+    -   Email body is extracted from each message
+    -   Quoted-printable encoding artifacts are decoded
+    -   System metadata and email headers are removed
+    -   Same cleaning pipeline is applied as in training data
+
+6.  **Feature Standardization:**
+
+    -   Both training and test datasets are transformed into a consistent format containing only cleaned text
+
+7.  **Filtering:**
+
+    -   Very short or incomplete emails are removed to improve data quality
+
+8.  **Classification Preparation:**
+
+    -   The cleaned training dataset is used to build a model
+    -   The test dataset is prepared for prediction using the same feature structure
+
+### Dataset Structure
+
+-   **Training Data:**
+    -   Spam emails (`spam_2`) → labeled as *spam*
+    -   Ham emails (`easy_ham`) → labeled as *ham*
+-   **Test Data:**
+    -   Personal spam emails stored in MBOX format (unlabeled)
+
+### Modeling Strategy Overview
+
+The overall workflow follows a standard supervised text classification pipeline:
+
+-   Train a model using labeled spam/ham emails
+-   Extract text-based features from cleaned email content
+-   Apply the trained model to predict labels for new unseen emails
+-   Evaluate how well the model generalizes to real-world spam messages
+
+### Anticipated Challenges
+
+A key challenge in this project is handling highly unstructured email data. Emails contain mixed formats such as plain text, HTML, encoded characters, and system-generated headers, all of which must be carefully removed or standardized.
+
+Another challenge is ensuring consistency between training and test datasets. Since they originate from different sources (folder-based corpus vs. MBOX file), they require separate preprocessing pipelines that still produce comparable cleaned outputs.
+
+Additionally, decoding quoted-printable content and removing encoding artifacts without corrupting the actual message text requires careful implementation.
+
+Finally, balancing text cleaning is critical: excessive cleaning may remove meaningful words important for classification, while insufficient cleaning may retain noise that reduces model performance.
+
+------------------------------------------------------------------------
+
+# Implementation of Data Import and Cleaning
+
+The following code demonstrates how the training and test email datasets are loaded and structured for analysis in R.
+
+### Training Data Import and Cleaning
+
+This section loads and processes 3,879 labeled emails (1,391 spam and 2,488 ham) from the SpamAssassin corpus. After cleaning HTML, URLs, punctuation, and noise, each email is reduced to a standardized text format. The final output is a structured dataset (train_emails) with clean text and balanced class labels for model training.
+
+```{r}
+#install.packages("tm")
+#install.packages("tm.plugin.mail")
+
+library(tidyverse)
+library(stringr)
+library(tm)
+
+# File Paths
+spam_path <- "C:/Users/Khandker/Documents/DATA607/Project 4 data/spam_2"
+ham_path  <- "C:/Users/Khandker/Documents/DATA607/Project 4 data/easy_ham"
+
+# Reusable Function to Import + Clean Email Folder
+load_email_folder <- function(path, class_label){
+
+  files <- list.files(path, full.names = TRUE)
+
+  raw_emails <- map_chr(files, function(x){
+    paste(
+      readLines(
+        x,
+        warn = FALSE,
+        encoding = "UTF-8"
+      ),
+      collapse = "\n"
+    )
+  })
+
+  df <- tibble(
+    raw_text = raw_emails,
+    label = class_label
+  )
+
+  # Extract body text (after headers)
+  extract_body <- function(x){
+
+    parts <- str_split(
+      x,
+      "\n\n",
+      n = 2,
+      simplify = TRUE
+    )
+
+    if(ncol(parts) >= 2){
+      return(parts[2])
+    } else {
+      return(x)
+    }
+  }
+
+  # Improved cleaning function (balanced approach)
+  clean_text <- function(x){
+
+    x %>%
+      str_to_lower() %>%
+      
+      # Remove HTML tags
+      str_replace_all("<[^>]+>", " ") %>%
+      
+      # Remove URLs
+      str_replace_all("http\\S+|www\\S+", " ") %>%
+      
+      # Remove email addresses
+      str_replace_all("[[:alnum:]._%+-]+@[[:alnum:].-]+", " ") %>%
+      
+      # Remove reply quoting markers (ham-heavy noise)
+      str_replace_all("^>+\\s*", " ") %>%
+      str_replace_all("\\n>+\\s*", " ") %>%
+      
+      # Remove mailing list / system artifacts (light touch)
+      str_replace_all("==.*?==", " ") %>%
+      str_replace_all("content type.*?charset=.*?=", " ") %>%
+      
+      # Remove HTML/CSS tokens (but NOT overly broad)
+      str_replace_all("\\b(nbsp|href|font|table|td|tr|img|meta|html|style|align)\\b", " ") %>%
+      
+      # Remove non-ASCII junk (keeps normal punctuation words intact)
+      str_replace_all("[^[:ascii:]]", " ") %>%
+      
+      # Remove digits only (keep words like 'win', 'free', etc.)
+      str_replace_all("[[:digit:]]+", " ") %>%
+      
+      # Remove punctuation but keep structure
+      str_replace_all("[[:punct:]]", " ") %>%
+      
+      # Collapse whitespace
+      str_replace_all("\\s+", " ") %>%
+      str_trim()
+
+  }
+
+  df %>%
+    mutate(
+      text = map_chr(raw_text, extract_body),
+      text = clean_text(text)
+    ) %>%
+    filter(text != "") %>%
+    filter(str_count(text, "\\S+") >= 5) %>%
+    select(text, label)
+
+}
+
+# Load Data
+spam_df <- load_email_folder(spam_path, "spam")
+ham_df  <- load_email_folder(ham_path, "ham")
+
+# Convert Labels to Factor
+spam_df$label <- as.factor(spam_df$label)
+ham_df$label  <- as.factor(ham_df$label)
+
+# Combine Dataset
+train_emails <- bind_rows(spam_df, ham_df)
+
+# Final Checks
+glimpse(train_emails)
+table(train_emails$label)
+
+print(train_emails, n = 10)
+```
+
+### Test Data Import and Cleaning (MBOX Dataset)
+
+This section processes 50 real-world Gmail MBOX emails by splitting raw message logs and extracting email bodies. The cleaning pipeline removes encoded text artifacts, system headers, and HTML content, producing highly compressed email text. The final output (test_df) contains 50 cleaned but unlabeled real spam emails used for external validation.
+
+```{r}
+library(tidyverse)
+library(stringr)
+library(stringi)
+
+# -----------------------------
+# 1. Load MBOX file
+# -----------------------------
+test_path <- "C:/Users/Khandker/Documents/DATA607/Project 4 data/Personal Spam Emails/Spam.mbox"
+
+raw_lines <- readLines(test_path, warn = FALSE, encoding = "UTF-8")
+
+# -----------------------------
+# 2. Split emails
+# -----------------------------
+email_blocks <- split(raw_lines, cumsum(str_detect(raw_lines, "^From ")))
+
+emails_raw <- map_chr(email_blocks, ~ paste(.x, collapse = "\n"))
+
+# -----------------------------
+# 3. Extract body
+# -----------------------------
+extract_body_mbox <- function(x) {
+
+  parts <- str_split(x, "\n\n", n = 2, simplify = TRUE)
+
+  if (ncol(parts) >= 2) parts[2] else x
+}
+
+# -----------------------------
+# 4. SAFE quoted-printable decoder (FIXED)
+# -----------------------------
+decode_qp_safe <- function(x) {
+
+  x <- as.character(x)
+
+  # remove soft line breaks
+  x <- str_replace_all(x, "=\\r?\\n", "")
+
+  # FIX: proper vector-safe replacement using stri_trans_general workaround
+  # First convert =XX hex manually using regex split approach
+
+  x <- str_replace_all(x, "=[0-9A-Fa-f]{2}", function(match) {
+    sapply(match, function(m) {
+      rawToChar(as.raw(strtoi(sub("=", "", m), 16L)))
+    })
+  })
+
+  x
+}
+
+# -----------------------------
+# 5. Cleaning function
+# -----------------------------
+clean_text_test <- function(x) {
+
+  x %>%
+    as.character() %>%
+
+    decode_qp_safe() %>%
+
+    str_replace_all("<[^>]+>", " ") %>%
+    str_replace_all("http\\S+|www\\S+", " ") %>%
+    str_replace_all("[[:alnum:]._%+-]+@[[:alnum:].-]+", " ") %>%
+    str_replace_all("\\b[a-zA-Z0-9+/=]{15,}\\b", " ") %>%
+    str_replace_all("(?i)x-gm-thrid|x-gmail-labels|delivered-to|received|authentication-results", " ") %>%
+
+    str_to_lower() %>%
+    str_replace_all("[^[:alnum:] ]", " ") %>%
+    str_replace_all("\\s+", " ") %>%
+    str_trim()
+}
+
+# -----------------------------
+# 6. Build dataset (FIXED PIPELINE)
+# -----------------------------
+test_df <- tibble(
+  raw_text = emails_raw
+) %>%
+  mutate(
+    text = map_chr(raw_text, extract_body_mbox),
+    text = map_chr(text, clean_text_test)
+  ) %>%
+  filter(str_count(text, "\\S+") >= 5)
+
+# -----------------------------
+# 7. INSPECT OUTPUT PROPERLY
+# -----------------------------
+glimpse(test_df)
+print(test_df, n = 1, width = Inf)
+cat(test_df$text[1])
+```
+
+### Feature Engineering and Cross-Validation Setup
+
+This section converts email text into TF-IDF features with a maximum of 2000 tokens after tokenization and stopword removal. A 5-fold cross-validation framework is created to ensure robust model evaluation. The output is a reproducible modeling pipeline that prepares consistent input for both SVM and Logistic Regression.
+
+-   **Linear SVM Model Training:** A Linear Support Vector Machine is tuned using cross-validation over cost values and evaluated using accuracy, precision, recall, and F1-score. The model achieves extremely strong performance during cross-validation with accuracy around 0.992 and recall up to 0.996. The final fitted SVM model is selected based on highest accuracy and used for prediction.
+
+-   **Logistic Regression Model Training:** A regularized logistic regression model is tuned using a grid of penalty values and evaluated using ROC-AUC and classification metrics. Cross-validation results show strong performance, though slightly lower than SVM, with final accuracy around **0.992** in CV tuning. The best penalty model is selected and refit on the full training dataset.
+
+```{r}
+# ============================================================
+# MODEL IMPLEMENTATION
+# Two Algorithms:
+# 1. Support Vector Machine (Linear SVM)
+# 2. Regularized Logistic Regression (glmnet)
+# ============================================================
+
+library(tidymodels)
+library(textrecipes)
+library(glmnet)
+library(stopwords)
+library(LiblineaR)
+
+set.seed(607)
+
+#--------------------------------------------------
+# Factor Order
+#--------------------------------------------------
+train_emails <- train_emails %>%
+  mutate(label = factor(label, levels = c("ham", "spam")))
+
+#--------------------------------------------------
+# Train/Test Split
+#--------------------------------------------------
+email_split <- initial_split(
+  train_emails,
+  prop = 0.80,
+  strata = label
+)
+
+email_train <- training(email_split)
+email_test  <- testing(email_split)
+
+#--------------------------------------------------
+# 5 Fold CV
+#--------------------------------------------------
+cv_folds <- vfold_cv(
+  email_train,
+  v = 5,
+  strata = label
+)
+
+#--------------------------------------------------
+# TEXT RECIPE
+#--------------------------------------------------
+email_recipe <- recipe(label ~ text, data = email_train) %>%
+  step_tokenize(text) %>%
+  step_stopwords(text) %>%
+  step_tokenfilter(text, max_tokens = 2000) %>%
+  step_tfidf(text)
+
+#==================================================
+# MODEL 1 : SVM
+#==================================================
+svm_model <- svm_linear(
+  cost = tune()
+) %>%
+  set_engine("LiblineaR") %>%
+  set_mode("classification")
+
+svm_workflow <- workflow() %>%
+  add_recipe(email_recipe) %>%
+  add_model(svm_model)
+
+svm_grid <- grid_regular(
+  cost(range = c(-3, 2)),
+  levels = 8
+)
+
+svm_cv_results <- tune_grid(
+  svm_workflow,
+  resamples = cv_folds,
+  grid = svm_grid,
+  metrics = metric_set(
+    accuracy,
+    precision,
+    recall,
+    f_meas
+  ),
+  control = control_grid(save_pred = TRUE)
+)
+
+best_cost <- select_best(
+  svm_cv_results,
+  metric = "accuracy"
+)
+
+final_svm_workflow <- finalize_workflow(
+  svm_workflow,
+  best_cost
+)
+
+svm_final_fit <- fit(
+  final_svm_workflow,
+  data = email_train
+)
+
+#==================================================
+# MODEL 2 : LOGISTIC REGRESSION
+#==================================================
+log_model <- logistic_reg(
+  penalty = tune(),
+  mixture = 1
+) %>%
+  set_engine("glmnet") %>%
+  set_mode("classification")
+
+log_workflow <- workflow() %>%
+  add_recipe(email_recipe) %>%
+  add_model(log_model)
+
+lambda_grid <- grid_regular(
+  penalty(range = c(-4, 0)),
+  levels = 10
+)
+
+log_cv_results <- tune_grid(
+  log_workflow,
+  resamples = cv_folds,
+  grid = lambda_grid,
+  metrics = metric_set(
+    accuracy,
+    roc_auc,
+    precision,
+    recall,
+    f_meas
+  ),
+  control = control_grid(save_pred = TRUE)
+)
+
+best_lambda <- select_best(
+  log_cv_results,
+  metric = "roc_auc"
+)
+
+final_log_workflow <- finalize_workflow(
+  log_workflow,
+  best_lambda
+)
+
+log_final_fit <- fit(
+  final_log_workflow,
+  data = email_train
+)
+```
+
+### Cross-Validation Model Comparison
+
+This section compares both models using aggregated cross-validation results. Linear SVM slightly outperforms Logistic Regression across most metrics, especially recall and F1-score, while both maintain very high accuracy. The results indicate strong and stable performance for both models with a small advantage for SVM.
+
+-   **Holdout Test Set Evaluation (Labeled Split Data):** Both models are evaluated on a holdout test split using confusion matrices and classification metrics. Linear SVM achieves 0.990 accuracy, 0.996 recall, and 0.992 F1-score, while Logistic Regression achieves 0.973 accuracy and 0.979 F1-score. The results confirm strong generalization, with SVM consistently outperforming Logistic Regression. Logistic Regression performs well but shows slightly lower classification strength across all metrics.
+
+```{r}
+# ============================================================
+# MODEL EVALUATION AND COMPARISON
+# Compare:
+# 1. Cross Validation Results
+# 2. Holdout Test Set Performance
+# 3. Final Best Model
+# ============================================================
+
+library(tidyverse)
+library(tidymodels)
+
+#--------------------------------------------------
+# 1. CROSS VALIDATION RESULTS
+#--------------------------------------------------
+
+# SVM CV Results
+svm_metrics <- collect_metrics(svm_cv_results) %>%
+  select(.metric, mean, std_err) %>%
+  mutate(model = "Linear SVM")
+
+# Logistic Regression CV Results
+log_metrics <- collect_metrics(log_cv_results) %>%
+  filter(.config == best_lambda$.config) %>%
+  select(.metric, mean, std_err) %>%
+  mutate(model = "Logistic Regression")
+
+# Combine Results
+cv_results <- bind_rows(svm_metrics, log_metrics) %>%
+  select(model, .metric, mean, std_err)
+
+print(cv_results)
+
+#--------------------------------------------------
+# 2. HOLDOUT TEST SET PERFORMANCE
+#--------------------------------------------------
+
+#-----------------------
+# SVM Predictions
+#-----------------------
+svm_preds <- predict(
+  svm_final_fit,
+  email_test
+) %>%
+  bind_cols(email_test)
+
+# Metrics
+svm_test_metrics <- metric_set(
+  accuracy,
+  precision,
+  recall,
+  f_meas
+)(
+  svm_preds,
+  truth = label,
+  estimate = .pred_class
+) %>%
+  mutate(model = "Linear SVM")
+
+# Confusion Matrix
+conf_mat(svm_preds, truth = label, estimate = .pred_class)
+
+#-----------------------
+# Logistic Predictions
+#-----------------------
+log_preds <- predict(
+  log_final_fit,
+  email_test,
+  type = "prob"
+) %>%
+  bind_cols(
+    predict(log_final_fit, email_test),
+    email_test
+  )
+
+# Metrics
+log_test_metrics <- metric_set(
+  accuracy,
+  roc_auc,
+  precision,
+  recall,
+  f_meas
+)(
+  log_preds,
+  truth = label,
+  estimate = .pred_class,
+  .pred_spam
+) %>%
+  mutate(model = "Logistic Regression")
+
+# Confusion Matrix
+conf_mat(log_preds, truth = label, estimate = .pred_class)
+
+#--------------------------------------------------
+# 3. FINAL TEST SET COMPARISON
+#--------------------------------------------------
+
+final_results <- bind_rows(
+  svm_test_metrics,
+  log_test_metrics
+) %>%
+  select(model, .metric, .estimate)
+
+print(final_results)
+
+#--------------------------------------------------
+# 4. BEST MODEL BASED ON ACCURACY
+#--------------------------------------------------
+
+final_results %>%
+  filter(.metric == "accuracy") %>%
+  arrange(desc(.estimate))
+```
+
+### Real-World Gmail Spam Evaluation
+
+Both models are applied to 50 real Gmail emails assumed to be spam based on Gmail labeling. Linear SVM achieves moderate performance (\~0.92 accuracy), while Logistic Regression drops significantly (\~0.58 accuracy), with unstable precision and recall due to single-class evaluation. This indicates stronger robustness of SVM under real-world noisy conditions.
+
+```{r}
+# ============================================================
+# FINAL EVALUATION ON TEST DATA (ALL GMAIL-SPAM LABELED)
+# True label assumed = "spam" for all rows
+# ============================================================
+
+library(tidyverse)
+library(tidymodels)
+
+#--------------------------------------------------
+# Add TRUE LABEL (all spam)
+#--------------------------------------------------
+test_labeled <- test_df %>%
+  mutate(truth = factor("spam", levels = c("ham", "spam")))
+
+#--------------------------------------------------
+# 1. SVM PREDICTIONS
+#--------------------------------------------------
+svm_preds <- predict(
+  svm_final_fit,
+  new_data = test_labeled
+) %>%
+  bind_cols(test_labeled)
+
+#--------------------------------------------------
+# 2. LOGISTIC REGRESSION PREDICTIONS
+#--------------------------------------------------
+log_preds <- predict(
+  log_final_fit,
+  new_data = test_labeled,
+  type = "prob"
+) %>%
+  bind_cols(
+    predict(log_final_fit, new_data = test_labeled),
+    test_labeled
+  )
+
+#--------------------------------------------------
+# 3. METRICS FUNCTION (since binary classification)
+#--------------------------------------------------
+metrics_set <- metric_set(
+  accuracy,
+  precision,
+  recall,
+  f_meas
+)
+
+#--------------------------------------------------
+# 4. SVM PERFORMANCE
+#--------------------------------------------------
+svm_results <- metrics_set(
+  svm_preds,
+  truth = truth,
+  estimate = .pred_class
+) %>%
+  mutate(model = "Linear SVM")
+
+#--------------------------------------------------
+# 5. LOGISTIC REGRESSION PERFORMANCE
+#--------------------------------------------------
+log_results <- metrics_set(
+  log_preds,
+  truth = truth,
+  estimate = .pred_class
+) %>%
+  mutate(model = "Logistic Regression")
+
+#--------------------------------------------------
+# 6. SIDE-BY-SIDE COMPARISON
+#--------------------------------------------------
+final_comparison <- bind_rows(svm_results, log_results) %>%
+  select(model, .metric, .estimate)
+
+final_comparison
+
+# ============================================================
+# PREDICTION COUNTS FOR TEST DATA
+# ============================================================
+
+# SVM prediction counts
+svm_preds %>%
+  count(.pred_class) %>%
+  rename(prediction = .pred_class,
+         count = n)
+
+# Logistic Regression prediction counts
+log_preds %>%
+  count(.pred_class) %>%
+  rename(prediction = .pred_class,
+         count = n)
+```
+
+# Conclusion
+
+This project built and evaluated spam classification models using TF-IDF features and supervised learning techniques. Both Linear SVM and Logistic Regression achieved strong performance on the structured test dataset, with accuracy above 97%. However, Linear SVM consistently outperformed Logistic Regression, reaching about 99% accuracy and higher recall. When applied to real-world Gmail spam emails, SVM also showed greater stability, while Logistic Regression performance dropped significantly. Overall, Linear SVM proved to be the most reliable and effective model for spam email classification in both controlled and real-world settings.
+
+# Reference
+
+-   OpenAI. (2026). *ChatGPT conversation: Email spam classification approach and R preprocessing pipeline* \[Large language model\]. <https://chat.openai.com/>
