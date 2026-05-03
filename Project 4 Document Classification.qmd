@@ -704,3 +704,4 @@ This project built and evaluated spam classification models using TF-IDF feature
 # Reference
 
 -   OpenAI. (2026). *ChatGPT conversation: Email spam classification approach and R preprocessing pipeline* \[Large language model\]. <https://chat.openai.com/>
+-   OpenAI. (2026). *ChatGPT conversation: Spam email classification project using SVM and logistic regression in R* \[Large language model\]. <https://chat.openai.com/>
